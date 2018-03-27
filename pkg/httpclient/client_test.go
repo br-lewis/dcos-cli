@@ -15,15 +15,15 @@ import (
 )
 
 func TestGet(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "GET", r.Method)
+	ts := newAssertServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/path", r.URL.Path)
+		assert.Equal(t, http.MethodGet, r.Method)
 		w.Write([]byte("ok"))
 	}))
-	defer ts.Close()
+	defer ts.close()
 
 	conf := config.New()
-	conf.SetURL(ts.URL)
+	conf.SetURL(ts.server.URL)
 
 	client := New(conf)
 
@@ -36,9 +36,9 @@ func TestGet(t *testing.T) {
 }
 
 func TestPost(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "POST", r.Method)
+	ts := newAssertServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/path", r.URL.Path)
+		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
 
 		body, err := ioutil.ReadAll(r.Body)
@@ -47,10 +47,10 @@ func TestPost(t *testing.T) {
 		assert.Equal(t, `{"cluster":"DC/OS"}`, string(body))
 		w.Write([]byte("ok"))
 	}))
-	defer ts.Close()
+	defer ts.close()
 
 	conf := config.New()
-	conf.SetURL(ts.URL)
+	conf.SetURL(ts.server.URL)
 
 	client := New(conf)
 
@@ -105,13 +105,13 @@ func TestTimeout(t *testing.T) {
 }
 
 func TestTLS(t *testing.T) {
-	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := newTLSAssertServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	}))
-	defer ts.Close()
+	defer ts.close()
 
 	certPool := x509.NewCertPool()
-	certPool.AddCert(ts.Certificate())
+	certPool.AddCert(ts.server.Certificate())
 
 	tlsConfigs := []struct {
 		tls   config.TLS
@@ -128,7 +128,7 @@ func TestTLS(t *testing.T) {
 	}
 
 	conf := config.New()
-	conf.SetURL(ts.URL)
+	conf.SetURL(ts.server.URL)
 
 	for _, exp := range tlsConfigs {
 		conf.SetTLS(exp.tls)
@@ -145,4 +145,47 @@ func TestTLS(t *testing.T) {
 			require.Nil(t, resp)
 		}
 	}
+}
+
+type assertServer struct {
+	t      *testing.T
+	server *httptest.Server
+	called bool
+}
+
+func newAssertServer(t *testing.T, handler http.HandlerFunc) *assertServer {
+	a := &assertServer{
+		t:      t,
+		called: false,
+	}
+
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.called = true
+		handler(w, r)
+	})
+	ts := httptest.NewServer(h)
+	a.server = ts
+
+	return a
+}
+
+func newTLSAssertServer(t *testing.T, handler http.HandlerFunc) *assertServer {
+	a := &assertServer{
+		t:      t,
+		called: false,
+	}
+
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.called = true
+		handler(w, r)
+	})
+
+	ts := httptest.NewTLSServer(h)
+	a.server = ts
+	return a
+}
+
+func (a *assertServer) close() {
+	assert.True(a.t, a.called, "Test server handler never received call")
+	a.server.Close()
 }
